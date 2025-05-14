@@ -2,6 +2,7 @@
 
 This repository presents a convolutional neural network with temporal fusion transformer (CNN-TFT) for time series forecasting.
 
+The optimized CNN-TFT model is available [here](https://github.com/SFStefenon/CNN-TFT/blob/main/model.py), 
 
 ---
 
