@@ -1,0 +1,5 @@
+,0
+CNN_layers,4
+num_heads,2
+filters,483
+kernel_size,3
