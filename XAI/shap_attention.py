@@ -15,9 +15,7 @@ from keras.metrics import MeanAbsoluteError
 import torch
 from scipy.ndimage import gaussian_filter1d
 
-
-
-seed = 42
+seed = 1
 np.random.seed(seed)
 random.seed(seed)
 tf.random.set_seed(seed)
@@ -46,12 +44,10 @@ df["group"] = "tucurui"
 df = df.rename(columns={"Natural Flow": "y", "UPH610010000": "precipitation"})
 data = df[["y", "precipitation"]]
 
-
 data = df[["y"]]
 # convert y and precipitation to numpy arrays
 data = data.to_numpy()
 features = data.shape[1]
-
 
 # create_dataset function
 def create_dataset(data, window_size):
@@ -60,7 +56,6 @@ def create_dataset(data, window_size):
         X.append(data[i:i + window_size])
         y.append(data[i + window_size, 0])
     return np.array(X), np.array(y)
-
 
 window_size = 30  # Use 30 previous steps to predict next step
 X, y = create_dataset(data, window_size)
@@ -150,7 +145,6 @@ colors = cm.plasma(np.linspace(0, 1, window_size))
 plt.figure(figsize=(5, 3))
 bars = plt.bar(lags, temporal_weights, color=colors)
 
-
 # plt.title("Mean Attention Weights", fontsize=14)
 plt.xlabel("Time Step (Lag)", fontsize=12)
 plt.ylabel("Attention Weight", fontsize=12)
@@ -170,18 +164,11 @@ plt.savefig("mean_attention_weights.png", dpi=300)
 
 import shap
 
-
 background = X_train[np.random.choice(X_train.shape[0], 100, replace=False)]
 explainer = shap.Explainer(model, background)
-
-
 test_samples = X_test[:4]
-
-
 explainer = shap.GradientExplainer(model, background)
 shap_values = explainer.shap_values(test_samples)
-
-
 
 for i in range(len(test_samples)):
     plt.figure(figsize=(10, 3))
@@ -197,8 +184,6 @@ import matplotlib.colors as mcolors
 
 for i in range(len(test_samples)):
     shap_vec = shap_values[i].flatten()
-
-
     cmap = cm.seismic  # ou 'coolwarm'
     norm = mcolors.TwoSlopeNorm(vcenter=0, vmin=shap_vec.min(), vmax=shap_vec.max())
     colors = cmap(norm(shap_vec))
@@ -237,12 +222,9 @@ third = window_size // 3
 initial_segment = shap_vector[:third]
 middle_segment = shap_vector[third:2*third]
 final_segment = shap_vector[2*third:]
-
-
 impact_initial = np.sum(np.abs(initial_segment))
 impact_middle = np.sum(np.abs(middle_segment))
 impact_final = np.sum(np.abs(final_segment))
-
 
 print(f"Initial Impact  (lags 0–{third-1}):   {impact_initial:.4f}")
 print(f"Middle Impact  (lags {third}–{2*third-1}): {impact_middle:.4f}")
@@ -259,7 +241,6 @@ plt.title("SHAP value heatmap (samples vs lags)")
 plt.xlabel("Time step")
 plt.ylabel("Sample")
 plt.show()
-
 
 shap_vector = shap_values[0].flatten()
 attention_vector = temporal_weights
@@ -282,14 +263,11 @@ lags = [f"t-{i}" for i in range(window_size, 0, -1)]  # Lags: t-30 → t-1
 # plt.figure(figsize=(12, 4))
 plt.figure(figsize=(5, 3))
 
-
 plt.plot(lags, smoothed_map, label='SHAP × Attention (Smoothed)',
          color='#9467bd', linewidth=2.5)
 
-
 plt.plot(lags, combined_map, label='Original (Raw)',
          color='gray', linestyle='--', linewidth=1.5, alpha=0.5)
-
 
 #plt.title("Combined Importance Map: SHAP × Attention", fontsize=14)
 plt.xlabel("Time Step (Lag)", fontsize=12)
@@ -297,13 +275,8 @@ plt.ylabel("Combined Value", fontsize=12)
 plt.xticks(ticks=np.array(list(np.arange(0, window_size, 3)) + [window_size - 1]))
 plt.yticks(fontsize=9)
 plt.grid(True, linestyle='--', alpha=0.6)
-
-
 plt.axhline(0, color='black', linestyle=':', linewidth=1)
-
-
 plt.legend(fontsize=10, loc='lower left', frameon=True, framealpha=0.9, edgecolor='gray')
-
 plt.tight_layout()
 # plt.show()
 plt.savefig("combined_importance_map.png", dpi=300)
