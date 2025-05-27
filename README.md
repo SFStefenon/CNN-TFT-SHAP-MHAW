@@ -1,10 +1,10 @@
 # CNN-TFT
 
-This repository presents a convolutional neural network with temporal fusion transformer (CNN-TFT) for time series forecasting. The optimized CNN-TFT model is available [here](https://github.com/SFStefenon/CNN-TFT/blob/main/model.py). 
+This repository presents a convolutional neural network with temporal fusion transformer (CNN-TFT) hypertunded by Baesyana optimization for time series forecasting. The optimized CNN-TFT model is available [here](https://github.com/SFStefenon/CNN-TFT/blob/main/CNN-TFT.py). 
 
 To compute the experiments and validate the model's performance, the natural inflow of the Tucurui hydroelectric power plant was considered (available [here](https://github.com/SFStefenon/CNN-TFT/blob/main/tucurui.csv)).
 
-To have these hyperparameters setup, a tuning was computed using Bayesian optimization as presented [here](https://github.com/SFStefenon/CNN-TFT/blob/main/hypertuning.py). To prove that the proposed model is stable, a statistical analysis was computed, as presented [here](https://github.com/SFStefenon/CNN-TFT/blob/main/stats.py).
+To have these hyperparameters set up, a hyperparameter tuning was computed using Bayesian optimization as presented [here](https://github.com/SFStefenon/CNN-TFT/blob/main/Model_eval/hypertuning.py). To prove that the proposed model is stable, a statistical analysis was computed, as presented [here](http://github.com/SFStefenon/CNN-TFT/blob/main/Model_eval/stats.py).
 
 ---
 
