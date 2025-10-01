@@ -10,23 +10,4 @@ The number of attention heads, CNN layers, filters, and kernel size are tuned fo
 
 ![image](https://github.com/user-attachments/assets/8a329886-42b7-465d-b53b-9dc2453848e6)
 
----
 
-Additional information can be found at the **[Original Paper]()**.
-
-Stefenon, S. F., Matos-Carvalho, J. P., Leithardt, V. R. Q., Yow, K. C. CNN-TFT explained by SHAP with multi-head attention weights for time series forecasting, xxxxx, 2025.
-
-BibTeX:
-`@article{stefenon2025cnn-tft, title={CNN-TFT explained by SHAP with multi-head attention weights for time series forecasting}, author={Stefenon, S. F. and Matos-Carvalho, J. P. and Leithardt, V. R. Q. and Yow, K. C.}, journal={xx}, pages={xx}, volume={xx}, year={2025}, doi={xxx}}`
-
----
-
-Thank you
-
-Dr. **Stefano Frizzo Stefenon**
-
-Postdoctoral fellow at the University of Regina
-
-Faculty of Engineering and Applied Sciences
-
-Regina, SK, Canada, 2025.
