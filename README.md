@@ -15,13 +15,6 @@ The number of attention heads, CNN layers, filters, and kernel size are tuned fo
 
 ## 👨‍🏫 Stefano Frizzo Stefenon, PhD  
 
-### 🎓 **Professor** 
-
-💻 Departamento de Engenharia Informática 
-
-🏛️ Instituto Superior de Engenharia de Lisboa (ISEL)
-
-🏫 Instituto Politécnico de Lisboa (IPL)
 
 ---
 
