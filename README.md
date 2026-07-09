@@ -4,7 +4,7 @@ This repository presents a convolutional neural network with a transformer-based
 
 To compute the experiments and validate the model's performance, the natural inflow of the Tucurui hydroelectric power plant was considered (available [here](https://github.com/SFStefenon/CNN-TFT/blob/main/tucurui.csv)).
 
-To have these hyperparameters set up, a hyperparameter tuning was computed using Bayesian optimization as presented [here](https://github.com/SFStefenon/CNN-TFT/blob/main/Model_eval/hypertuning.py). To prove that the proposed TFT-CNN model is stable, a statistical analysis was computed, as presented [here](http://github.com/SFStefenon/CNN-TFT/blob/main/Model_eval/stats.py).
+To have these hyperparameters set up, hyperparameter tuning was computed using Bayesian optimization as presented [here](https://github.com/SFStefenon/CNN-TFT/blob/main/Model_eval/hypertuning.py). To prove that the proposed model is stable, a statistical analysis was computed, as presented [here](http://github.com/SFStefenon/CNN-TFT/blob/main/Model_eval/stats.py).
 
 The number of attention heads, CNN layers, filters, and kernel size are tuned for creating the following architecture:
 
