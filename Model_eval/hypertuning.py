@@ -1,217 +1,198 @@
-import torch
+pip -q install bayesian-optimization keras-tuner scikit-learn
+
 import os
-device = torch.device("cuda:0")
-print(f"Using device: {device}")
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+import gc
+import random
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+
+from keras import layers, models
+from sklearn.preprocessing import StandardScaler
+from bayes_opt import BayesianOptimization
+from scipy.interpolate import griddata
 
 window_size = 15
-epochs = 20
-
-import pandas as pd
-import numpy as np
-from keras import layers, models
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
-import tensorflow as tf
-import random
-import time
-from statsmodels.tools.eval_measures import rmse
-from sklearn.metrics import mean_absolute_percentage_error
-from sklearn.metrics import mean_absolute_error
-from sklearn.metrics import r2_score
-from sklearn.metrics import mean_squared_log_error
-
+epochs = 50
+batch_size = 32
 seed = 1
+
+os.environ["PYTHONHASHSEED"] = str(seed)
 np.random.seed(seed)
 random.seed(seed)
 tf.random.set_seed(seed)
 
-df = pd.read_csv("tucurui.csv", sep=";")
-df.columns = [col.strip() for col in df.columns]
-df["Data"] = pd.to_datetime(df["Data"], dayfirst=True)
-df["UPH610010000"] = df["UPH610010000"].str.replace(",", ".").astype(float)
-df["Natural Flow"] = df["Natural Flow"].str.replace(",", ".").astype(float)
+gpus = tf.config.list_physical_devices("GPU")
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"Using GPU: {gpus[0]}")
+    except RuntimeError as error:
+        print(f"GPU configuration error: {error}")
+else:
+    print("Using CPU")
 
-df = df.sort_values("Data").reset_index(drop=True)
-df["time_idx"] = df.index
-df["group"] = "tucurui"
-df = df.rename(columns={"Natural Flow": "y", "UPH610010000": "precipitation"})
-#data = df[["y", "precipitation"]]
-data = df[["y"]]
-
-# convert y and precipitation to numpy arrays
-data = data.to_numpy()
-features = data.shape[1]
-
-# create_dataset function
 def create_dataset(data, window_size):
     X, y = [], []
     for i in range(len(data) - window_size):
         X.append(data[i:i + window_size])
         y.append(data[i + window_size, 0])
-    return np.array(X), np.array(y)
+    return np.asarray(X, dtype=np.float32), np.asarray(y, dtype=np.float32)
 
-# Load Dataset
-X, y = create_dataset(data, window_size)
-
-# Split into train/test sets
-split = int(0.8 * len(X))
-X_train, y_train = X[:split], y[:split]
-X_test, y_test = X[split:], y[split:]
-
-# Normalize the data
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train.reshape(-1, features)).reshape(X_train.shape)
-X_test = scaler.transform(X_test.reshape(-1, features)).reshape(X_test.shape)
-y_train = scaler.transform(y_train.reshape(-1, 1)).reshape(y_train.shape)
-y_test = scaler.transform(y_test.reshape(-1, 1)).reshape(y_test.shape)
-
-# Reshape inputs for Conv1D (samples, timesteps, features)
-X_train = X_train.reshape((-1, window_size, features))
-X_test = X_test.reshape((-1, window_size, features))
-
-from bayes_opt import BayesianOptimization
-
-def objective_function(CNN_layers, num_heads, filters, kernel_size):
-    CNN_layers = int(CNN_layers)
-    num_heads = int(num_heads)
-    filters = int(filters)
-    kernel_size = int(kernel_size)
-
+def build_model(CNN_layers, num_heads, filters, kernel_size):
     inputs = layers.Input(shape=(window_size, features))
-    x = layers.Conv1D(filters, kernel_size, activation='relu', padding='causal')(inputs)
+    x = inputs
     for _ in range(CNN_layers):
-      x = layers.Conv1D(filters, kernel_size, activation='relu', padding='causal')(x)
+        x = layers.Conv1D(filters, kernel_size, activation="relu", padding="causal")(x)
     attention = layers.MultiHeadAttention(num_heads=num_heads, key_dim=32)(x, x)
     x = layers.Concatenate()([x, attention])
     x = layers.GlobalAveragePooling1D()(x)
     outputs = layers.Dense(1)(x)
     model = models.Model(inputs, outputs)
-    model.compile(optimizer='adam', loss='mse', metrics=['mse'])
-    history = model.fit(X_train, y_train, epochs=epochs, batch_size=32, validation_split=0.2, shuffle=False, verbose=1)
-    val_mse = min(history.history["val_mse"])
-    return -np.sqrt(val_mse)
+    model.compile(optimizer="adam", loss="mse", metrics=["mse"])
+    return model
 
-# Define parameter bounds
+df = pd.read_csv("tucurui.csv", sep=";")
+df.columns = [col.strip() for col in df.columns]
+df["Data"] = pd.to_datetime(df["Data"], dayfirst=True)
+df["UPH610010000"] = df["UPH610010000"].astype(str).str.replace(",", ".", regex=False).astype(float)
+df["Natural Flow"] = df["Natural Flow"].astype(str).str.replace(",", ".", regex=False).astype(float)
+df = df.sort_values("Data").reset_index(drop=True)
+df["time_idx"] = df.index
+df["group"] = "tucurui"
+df = df.rename(columns={"Natural Flow": "y", "UPH610010000": "precipitation"})
+
+data = df[["y"]].to_numpy(dtype=np.float32)
+# data = df[["y", "precipitation"]].to_numpy(dtype=np.float32)
+features = data.shape[1]
+
+raw_split = int(0.8 * len(data))
+scaler = StandardScaler()
+scaler.fit(data[:raw_split])
+scaled_data = scaler.transform(data)
+
+X, y = create_dataset(scaled_data, window_size)
+split = raw_split - window_size
+X_train, y_train = X[:split], y[:split]
+X_test, y_test = X[split:], y[split:]
+
+print(f"Training windows: {len(X_train)}")
+print(f"Testing windows: {len(X_test)}")
+print(f"Input shape: {X_train.shape}")
+
+evaluated_configs = {}
+trial_number = 0
+
+def objective_function(CNN_layers, num_heads, filters, kernel_size):
+    global trial_number
+    CNN_layers = int(round(CNN_layers))
+    num_heads = int(round(num_heads))
+    filters = int(round(filters))
+    kernel_size = int(round(kernel_size))
+    config = (CNN_layers, num_heads, filters, kernel_size)
+
+    if config in evaluated_configs:
+        return evaluated_configs[config]
+    trial_number += 1
+    print(f"\nTrial {trial_number}: CNN_layers={CNN_layers}, num_heads={num_heads}, filters={filters}, kernel_size={kernel_size}")
+
+    tf.keras.backend.clear_session()
+    gc.collect()
+    np.random.seed(seed)
+    random.seed(seed)
+    tf.random.set_seed(seed)
+    model = build_model(CNN_layers, num_heads, filters, kernel_size)
+    history = model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size,
+                        validation_split=0.2, shuffle=False, verbose=0)
+    val_rmse = np.sqrt(min(history.history["val_mse"]))
+    target = -val_rmse
+    evaluated_configs[config] = target
+    print(f"Validation RMSE: {val_rmse:.6f}")
+
+    del model
+    tf.keras.backend.clear_session()
+    gc.collect()
+    return target
+
 pbounds = {
-    'CNN_layers': (1, 12),
-    'num_heads': (2, 5),
-    'filters': (16, 256),
-    'kernel_size': (2, 5),
-}
+    "CNN_layers": (1, 12),
+    "num_heads": (2, 5),
+    "filters": (16, 256),
+    "kernel_size": (2, 5)}
 
-# Initialize Bayesian Optimizer
-optimizer = BayesianOptimization(
-    f=objective_function,
-    pbounds=pbounds,
-    random_state=1,
-)
-
-# Perform optimization
+optimizer = BayesianOptimization(f=objective_function, pbounds=pbounds, random_state=seed, verbose=2)
 optimizer.maximize(init_points=5, n_iter=50)
 
-# Get best parameters
-best_params = optimizer.max
-print("Best Parameters:", best_params)
-Best = [int(best_params['params']['CNN_layers']), int(best_params['params']['num_heads']), int(best_params['params']['filters']), int(best_params['params']['kernel_size'])]
+best_params = {
+    "CNN_layers": int(round(optimizer.max["params"]["CNN_layers"])),
+    "num_heads": int(round(optimizer.max["params"]["num_heads"])),
+    "filters": int(round(optimizer.max["params"]["filters"])),
+    "kernel_size": int(round(optimizer.max["params"]["kernel_size"]))}
 
-df = pd.DataFrame(data=Best, index=["CNN_layers", "num_heads", "filters", "kernel_size"])
-df.to_csv('best_params.csv')
+print(f"\nBest validation RMSE: {-optimizer.max['target']:.6f}")
+print("Best parameters:", best_params)
 
-import matplotlib.pyplot as plt
-import pandas as pd
-from pandas.plotting import parallel_coordinates
-from scipy.interpolate import griddata
-from matplotlib import cm
+pd.DataFrame.from_dict(best_params, orient="index", columns=["Value"]).to_csv(
+    "best_params.csv", index_label="Parameter")
 
-# Process optimization results
 results = []
-for i, res in enumerate(optimizer.res):
-    # Cast parameters to correct types
-    params = {
-        'CNN_layers': int(res['params']['CNN_layers']),
-        'num_heads': int(res['params']['num_heads']),
-        'filters': res['params']['filters'],
-        'kernel_size': res['params']['kernel_size'],
-        'rmse': -res['target']  # Convert back to positive RMSE
-    }
-    results.append(params)
+for res in optimizer.res:
+    results.append({
+        "CNN_layers": int(round(res["params"]["CNN_layers"])),
+        "num_heads": int(round(res["params"]["num_heads"])),
+        "filters": int(round(res["params"]["filters"])),
+        "kernel_size": int(round(res["params"]["kernel_size"])),
+        "rmse": -res["target"]
+    })
 
-df = pd.DataFrame(results)
+results_df = pd.DataFrame(results)
+results_df.to_csv("bayesian_optimization_results.csv", index=False)
 
-# 1. Convergence Plot
+# Convergence plot
+results_df["best_rmse"] = results_df["rmse"].cummin()
 plt.figure(figsize=(5, 3))
-df['best_rmse'] = df['rmse'].cummin()
-plt.plot(df.index, df['best_rmse'], 'b-', label='Best RMSE')
-plt.scatter(df.index, df['rmse'], c='r', alpha=0.3, label='Trials')
-plt.xlabel('Iteration')
-plt.ylabel('RMSE')
-plt.grid(linestyle='--', linewidth=0.5)
-#plt.title('Bayesian Optimization Convergence')
-plt.legend(loc='upper right')
-plt.grid(True)
-plt.savefig('Bayesian-Optimization-Convergence.pdf', bbox_inches='tight')
-plt.show()
-
-# Parameters to visualize
-x_param = 'CNN_layers'
-y_param = 'num_heads'
-
-# Prepare data for contour plot
-x = np.array([res['params'][x_param] for res in optimizer.res])
-y = np.array([res['params'][y_param] for res in optimizer.res])
-z = np.array([-res['target'] for res in optimizer.res])  # RMSE values
-
-# Create grid for smooth contour plot
-xi = np.linspace(min(x), max(x), 100)
-yi = np.linspace(min(y), max(y), 100)
-xi, yi = np.meshgrid(xi, yi)
-
-# Interpolate z values using Gaussian process surrogate model
-zi = griddata((x, y), z, (xi, yi), method='cubic')
-
-# Create plot
-plt.figure(figsize=(5, 3.5))
-contour = plt.contourf(xi, yi, zi, levels=150, cmap=cm.viridis)
-plt.colorbar(contour, label='Loss')
-
-# Plot actual sampled points
-plt.scatter(x, y, c=z, s=50, edgecolor='black', cmap=cm.viridis,
-            linewidth=0.5, label='Sampled Points')
-
-plt.xlabel(x_param.capitalize().replace('_', ' '))
-plt.ylabel(y_param.capitalize().replace('_', ' '))
+plt.plot(results_df.index + 1, results_df["best_rmse"], label="Best RMSE")
+plt.scatter(results_df.index + 1, results_df["rmse"], alpha=0.3, label="Trials")
+plt.xlabel("Iteration")
+plt.ylabel("Validation RMSE")
+plt.legend(loc="upper right")
+plt.grid(True, linestyle="--", linewidth=0.5)
 plt.tight_layout()
-plt.savefig('Hyperparameter-Contour-Plot1.pdf', bbox_inches='tight')
+plt.savefig("Bayesian-Optimization-Convergence.pdf", bbox_inches="tight")
 plt.show()
 
-# Parameters to visualize
-x_param = 'filters'
-y_param = 'kernel_size'
+def contour_plot(results_df, x_param, y_param, filename):
+    grouped = results_df.groupby([x_param, y_param], as_index=False)["rmse"].min()
+    x = grouped[x_param].to_numpy(dtype=float)
+    y = grouped[y_param].to_numpy(dtype=float)
+    z = grouped["rmse"].to_numpy(dtype=float)
 
-# Prepare data for contour plot
-x = np.array([res['params'][x_param] for res in optimizer.res])
-y = np.array([res['params'][y_param] for res in optimizer.res])
-z = np.array([-res['target'] for res in optimizer.res])  # RMSE values
+    xi = np.linspace(x.min(), x.max(), 100)
+    yi = np.linspace(y.min(), y.max(), 100)
+    xi, yi = np.meshgrid(xi, yi)
 
-# Create grid for smooth contour plot
-xi = np.linspace(min(x), max(x), 100)
-yi = np.linspace(min(y), max(y), 100)
-xi, yi = np.meshgrid(xi, yi)
+    method = "cubic" if len(grouped) >= 4 else "linear"
+    zi = griddata((x, y), z, (xi, yi), method=method)
 
-# Interpolate z values using Gaussian process surrogate model
-zi = griddata((x, y), z, (xi, yi), method='cubic')
+    if zi is None or np.isnan(zi).all():
+        zi = griddata((x, y), z, (xi, yi), method="nearest")
+    else:
+        nearest = griddata((x, y), z, (xi, yi), method="nearest")
+        zi = np.where(np.isnan(zi), nearest, zi)
 
-# Create plot
-plt.figure(figsize=(5, 3.5))
-contour = plt.contourf(xi, yi, zi, levels=150, cmap=cm.viridis)
-plt.colorbar(contour, label='Loss')
+    plt.figure(figsize=(5, 3.5))
+    contour = plt.contour(xi, yi, zi, levels=20, colors="black", linewidths=0.8)
+    plt.clabel(contour, inline=True, fontsize=8, fmt="%.3f")
+    plt.scatter(x, y, c="black", s=50, edgecolor="black", linewidth=0.5, label="Sampled points")
+    plt.xlabel(x_param.replace("_", " ").title())
+    plt.ylabel(y_param.replace("_", " ").title())
+    plt.tight_layout()
+    plt.savefig(filename, bbox_inches="tight")
+    plt.show()
 
-# Plot actual sampled points
-plt.scatter(x, y, c=z, s=50, edgecolor='black', cmap=cm.viridis,
-            linewidth=0.5, label='Sampled Points')
-
-plt.xlabel(x_param.capitalize().replace('_', ' '))
-plt.ylabel(y_param.capitalize().replace('_', ' '))
-plt.tight_layout()
-plt.savefig('Hyperparameter-Contour-Plot2.pdf', bbox_inches='tight')
-plt.show()
+contour_plot(results_df, "CNN_layers", "num_heads", "Hyperparameter-Contour-Plot1.pdf")
+contour_plot(results_df, "filters", "kernel_size", "Hyperparameter-Contour-Plot2.pdf")
