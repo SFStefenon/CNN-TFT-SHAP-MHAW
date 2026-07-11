@@ -16,8 +16,8 @@ from statsmodels.tools.eval_measures import rmse
 # ============================================================
 # Configuration
 window_size = 15
-epochs = 1
-number_of_runs = 3
+epochs = 100
+number_of_runs = 50
 
 CNN_layers = 3
 num_heads = 4
