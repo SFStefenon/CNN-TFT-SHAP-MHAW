@@ -1,240 +1,353 @@
-import torch
 import os
-device = torch.device("cuda:0")
-print(f"Using device: {device}")
-
-window_size = 15
-epochs = 100
-
-import pandas as pd
-import numpy as np
-from keras import layers, models
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
-import tensorflow as tf
+import gc
 import random
-from statsmodels.tools.eval_measures import rmse
-from sklearn.metrics import mean_absolute_percentage_error
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from keras import layers, models
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_percentage_error
 from sklearn.metrics import mean_squared_log_error
+from scipy.stats import skew, kurtosis
+from statsmodels.tools.eval_measures import rmse
 
-def performance(y_true, y_pred):
-    # Calculate metrics
-    rmse_v = rmse(y_true, y_pred)
-    mae_v = mean_absolute_error(y_true, y_pred)
-    mape_v = mean_absolute_percentage_error(y_true, y_pred)
-    msle_v = mean_squared_log_error(y_true, abs(y_pred))
-    # RMSE & MAE & MAPE & MSLE
-    result = (f'{rmse_v:.2E} & {mae_v:.2E} & {mape_v:.2E} & {msle_v:.2E} \\\\')
-    return result
+# ============================================================
+# Configuration
+window_size = 15
+epochs = 1
+number_of_runs = 3
 
 CNN_layers = 3
 num_heads = 4
 filters = 238
 kernel_size = 4
+batch_size = 32
 
-rmse_v =[]
-mae_v = []
-mape_v = []
-msle_v = []
+# ============================================================
+# TensorFlow device configuration
+gpus = tf.config.list_physical_devices("GPU")
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"Using GPU: {gpus[0]}")
+    except RuntimeError as error:
+        print(f"GPU configuration error: {error}")
+else:
+    print("Using CPU")
 
-for i in range(100):
-    print(f"Run {i}: seed = {i}")
-    seed = i
-    np.random.seed(seed)
-    random.seed(seed)
-    tf.random.set_seed(seed)
+# ============================================================
+# Functions
+def create_dataset(data, window_size):
+    X, y = [], []
+    for index in range(len(data) - window_size):
+        X.append(data[index:index + window_size])
+        y.append(data[index + window_size, 0])
+    return (
+        np.asarray(X, dtype=np.float32),
+        np.asarray(y, dtype=np.float32))
 
-    df = pd.read_csv("tucurui.csv", sep=";")
-    df.columns = [col.strip() for col in df.columns]
-    df["Data"] = pd.to_datetime(df["Data"], dayfirst=True)
-    df["UPH610010000"] = df["UPH610010000"].str.replace(",", ".").astype(float)
-    df["Natural Flow"] = df["Natural Flow"].str.replace(",", ".").astype(float)
-    
-    df = df.sort_values("Data").reset_index(drop=True)
-    df["time_idx"] = df.index
-    df["group"] = "tucurui"
-    df = df.rename(columns={"Natural Flow": "y", "UPH610010000": "precipitation"})
-    #data = df[["y", "precipitation"]]
-    data = df[["y"]]
-    
-    # convert y and precipitation to numpy arrays
-    data = data.to_numpy()
-    features = data.shape[1]
-    
-    # create_dataset function
-    def create_dataset(data, window_size):
-        X, y = [], []
-        for i in range(len(data) - window_size):
-            X.append(data[i:i + window_size])
-            y.append(data[i + window_size, 0])
-        return np.array(X), np.array(y)
-    
-    # Load Dataset
-    X, y = create_dataset(data, window_size)
-    
-    # Split into train/test sets
-    split = int(0.8 * len(X))
-    X_train, y_train = X[:split], y[:split]
-    X_test, y_test = X[split:], y[split:]
-    
-    # Normalize the data
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train.reshape(-1, features)).reshape(X_train.shape)
-    X_test = scaler.transform(X_test.reshape(-1, features)).reshape(X_test.shape)
-    y_train = scaler.transform(y_train.reshape(-1, 1)).reshape(y_train.shape)
-    y_test = scaler.transform(y_test.reshape(-1, 1)).reshape(y_test.shape)
-    
-    # Reshape inputs for Conv1D (samples, timesteps, features)
-    X_train = X_train.reshape((-1, window_size, features))
-    X_test = X_test.reshape((-1, window_size, features))
-    
+def performance(y_true, y_pred):
+    y_true = np.asarray(y_true).flatten()
+    y_pred = np.asarray(y_pred).flatten()
+    rmse_value = rmse(y_true, y_pred)
+    mae_value = mean_absolute_error(y_true, y_pred)
+    mape_value = mean_absolute_percentage_error(y_true, y_pred)
+
+    # MSLE requires non-negative values
+    y_true_msle = np.clip(y_true, a_min=0, a_max=None)
+    y_pred_msle = np.clip(y_pred, a_min=0, a_max=None)
+    msle_value = mean_squared_log_error(y_true_msle, y_pred_msle)
+
+    result = (
+        f"{rmse_value:.2E} & "
+        f"{mae_value:.2E} & "
+        f"{mape_value:.2E} & "
+        f"{msle_value:.2E} \\\\"
+    )
+    return result
+
+def build_model(window_size, features, CNN_layers, filters, kernel_size, num_heads):
     inputs = layers.Input(shape=(window_size, features))
-    x = layers.Conv1D(filters, kernel_size, activation='relu', padding='causal')(inputs)
+    x = inputs
+
+    # CNN_layers now represents exactly the number of CNN layers
     for _ in range(CNN_layers):
-      x = layers.Conv1D(filters, kernel_size, activation='relu', padding='causal')(x)
+        x = layers.Conv1D(
+            filters=filters,
+            kernel_size=kernel_size,
+            activation="relu",
+            padding="causal",
+        )(x)
     attention = layers.MultiHeadAttention(num_heads=num_heads, key_dim=32)(x, x)
     x = layers.Concatenate()([x, attention])
     x = layers.GlobalAveragePooling1D()(x)
     outputs = layers.Dense(1)(x)
-    model = models.Model(inputs, outputs)
-    model.compile(optimizer='adam', loss='mse', metrics=['mse'])
-    history = model.fit(X_train, y_train, epochs=epochs, batch_size=32,
-                        validation_split=0.2, verbose=1)
-    test_loss = model.evaluate(X_test, y_test, verbose=0)
-    print(f"Loss: {test_loss[1]:.4f}")
-    test_part = X_test[0].reshape(1, window_size, features)
-    test_predictions = model.predict(test_part)
-    test_part = np.append(test_part, test_predictions)
-    
-    # Adding window size to the predictions
-    for i in range(1, window_size):
-        test_predictions = model.predict(test_part[-window_size:].reshape(1, window_size, features))
-        test_part = np.append(test_part, test_predictions)
-    test_part = test_part[-window_size:].flatten()
-    
-    # Calculate performance metrics
-    test_part = scaler.inverse_transform(test_part.reshape(-1, 1)).flatten()
-    y_test = scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
-    X_test, y_test = X[split:], y[split:]
-    y_true = y_test[:window_size]
-    y_pred = test_part
-    
-    rmse_v.append(rmse(y_true, y_pred))
-    mae_v.append(mean_absolute_error(y_true, y_pred))
-    mape_v.append(mean_absolute_percentage_error(y_true, y_pred))
-    msle_v.append(mean_squared_log_error(y_true, abs(y_pred)))
-    
-    # Calculate performance metrics
-    performance_metrics = performance(y_test[:window_size], test_part)
+    model = models.Model(inputs=inputs, outputs=outputs)
+    model.compile(optimizer="adam", loss="mse", metrics=["mse"])
+    return model
+
+# ============================================================
+# Load and prepare data
+df = pd.read_csv("tucurui.csv", sep=";")
+df.columns = [column.strip() for column in df.columns]
+df["Data"] = pd.to_datetime(df["Data"], dayfirst=True)
+df["UPH610010000"] = (df["UPH610010000"]
+    .astype(str)
+    .str.replace(",", ".", regex=False)
+    .astype(float))
+df["Natural Flow"] = (df["Natural Flow"]
+    .astype(str)
+    .str.replace(",", ".", regex=False)
+    .astype(float))
+df = (df.sort_values("Data")
+    .reset_index(drop=True))
+df["time_idx"] = df.index
+df["group"] = "tucurui"
+df = df.rename(columns={"Natural Flow": "y",
+        "UPH610010000": "precipitation"})
+data = df[["y"]].to_numpy(dtype=np.float32)
+features = data.shape[1]
+
+# ============================================================
+# Chronological division and normalization
+# This index represents the first original test target
+raw_split = int(0.8 * len(data))
+
+# Fit the scaler only with training observations
+scaler = StandardScaler()
+scaler.fit(data[:raw_split])
+
+# Transform the entire dataset using training statistics
+scaled_data = scaler.transform(data)
+
+# Create windows after normalization
+X, y = create_dataset(scaled_data, window_size)
+
+# Convert original-data split into windowed-data split
+split = raw_split - window_size
+X_train = X[:split]
+y_train = y[:split]
+X_test = X[split:]
+y_test = y[split:]
+print(f"Training windows: {len(X_train)}")
+print(f"Testing windows: {len(X_test)}")
+print(f"Input shape: {X_train.shape}")
+
+# ============================================================
+# Store results from all runs
+rmse_values = []
+mae_values = []
+mape_values = []
+msle_values = []
+
+# ============================================================
+# Multiple experiments
+for run in range(number_of_runs):
+    print(f"\nRun {run + 1}/{number_of_runs}: " 
+          f"seed = {run}")
+    seed = run
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    tf.random.set_seed(seed)
+
+    # Clear the previous model from memory
+    tf.keras.backend.clear_session()
+    gc.collect()
+    model = build_model(
+        window_size=window_size,
+        features=features,
+        CNN_layers=CNN_layers,
+        filters=filters,
+        kernel_size=kernel_size,
+        num_heads=num_heads)
+
+    history = model.fit(
+        X_train,
+        y_train,
+        epochs=epochs,
+        batch_size=batch_size,
+        validation_split=0.2,
+        shuffle=False,
+        verbose=1)
+
+    test_loss, test_mse = model.evaluate(
+        X_test,
+        y_test,
+        verbose=0)
+
+    print(f"Test MSE: {test_mse:.4f}")
+
+    # ========================================================
+    # Recursive forecasting
+    # First test input window
+    recursive_window = X_test[0].copy()
+    recursive_predictions = []
+    for forecast_step in range(window_size):
+        model_input = recursive_window.reshape(1, window_size, features)
+        prediction = model.predict(model_input, verbose=0)[0, 0]
+        recursive_predictions.append(prediction)
+
+        # Update the target variable with the prediction
+        new_observation = recursive_window[-1].copy()
+        new_observation[0] = prediction
+
+        # In a multivariate case, the remaining features retain
+        # their most recent observed values
+        recursive_window = np.vstack(
+            [recursive_window[1:],
+             new_observation])
+    recursive_predictions = np.asarray(
+        recursive_predictions,
+        dtype=np.float32)
+
+    # ========================================================
+    # Return predictions to the original scale
+    if features == 1:
+        y_pred = scaler.inverse_transform(recursive_predictions.reshape(-1, 1)).flatten()
+    else:
+        # Create an auxiliary array for inverse transformation
+        inverse_array = np.zeros((window_size, features), dtype=np.float32)
+        inverse_array[:, 0] = recursive_predictions
+        y_pred = scaler.inverse_transform(
+            inverse_array)[:, 0]
+
+    # True values corresponding to the recursive horizon
+    y_true = data[raw_split:raw_split + window_size, 0]
+    if len(y_true) != window_size:
+        raise ValueError(
+            "The test set does not contain enough observations "
+            "for the requested forecasting horizon.")
+
+    # ========================================================
+    # Calculate metrics
+    current_rmse = rmse(y_true, y_pred)
+    current_mae = mean_absolute_error(y_true, y_pred)
+    current_mape = mean_absolute_percentage_error(y_true, y_pred)
+    current_msle = mean_squared_log_error(
+        np.clip(y_true, a_min=0, a_max=None),
+        np.clip(y_pred, a_min=0, a_max=None))
+    rmse_values.append(current_rmse)
+    mae_values.append(current_mae)
+    mape_values.append(current_mape)
+    msle_values.append(current_msle)
+    performance_metrics = performance(y_true, y_pred)
     print(f"Performance metrics: {performance_metrics}")
 
-pd.DataFrame(rmse_v).to_csv('rmse_v1.csv', index=False)
-pd.DataFrame(mae_v).to_csv('mae_v1.csv', index=False)
-pd.DataFrame(mape_v).to_csv('mape_v1.csv', index=False)
-pd.DataFrame(msle_v).to_csv('msle_v1.csv', index=False)
+# ============================================================
+# Save metrics
 
-import numpy as np
-import pandas as pd
-from scipy.stats import skew, kurtosis
+pd.DataFrame({"RMSE": rmse_values}).to_csv("rmse_v1.csv", index=False)
+pd.DataFrame({"MAE": mae_values}).to_csv("mae_v1.csv", index=False)
+pd.DataFrame({"MAPE": mape_values}).to_csv("mape_v1.csv", index=False)
+pd.DataFrame({"MSLE": msle_values}).to_csv("msle_v1.csv", index=False)
 
-rmse = np.array(pd.read_csv('rmse_v1.csv')).flatten()
-mae = np.array(pd.read_csv('mae_v1.csv')).flatten()
-mape = np.array(pd.read_csv('mape_v1.csv')).flatten()
-msle = np.array(pd.read_csv('msle_v1.csv')).flatten()
+# ============================================================
+# Read saved results
 
-# Compute detailed statistics
+rmse_array = pd.read_csv("rmse_v1.csv")["RMSE"].to_numpy()
+mae_array = pd.read_csv("mae_v1.csv")["MAE"].to_numpy()
+mape_array = pd.read_csv("mape_v1.csv")["MAPE"].to_numpy()
+msle_array = pd.read_csv("msle_v1.csv")["MSLE"].to_numpy()
+
+# ============================================================
+# Statistical analysis
 def compute_stats(values):
+    values = np.asarray(values)
     q1 = np.percentile(values, 25)
     q3 = np.percentile(values, 75)
     return {
-        'Mean': np.mean(values),
-        'Std': np.std(values),
-        'Min': np.min(values),
-        'Max': np.max(values),
-        'Median': np.median(values),
-        'Q1 (25\\%)': q1,
-        'Q3 (75\\%)': q3,
-        'Range': np.max(values) - np.min(values),
-        'IQR': q3 - q1,
-        'Skewness': skew(values),
-        'Kurtosis': kurtosis(values),
+        "Mean": np.mean(values),
+        "Std": np.std(values, ddof=1),
+        "Min": np.min(values),
+        "Max": np.max(values),
+        "Median": np.median(values),
+        "Q1 (25\\%)": q1,
+        "Q3 (75\\%)": q3,
+        "Range": np.max(values) - np.min(values),
+        "IQR": q3 - q1,
+        "Skewness": skew(values),
+        "Kurtosis": kurtosis(values),
     }
 
-rmse_stats = compute_stats(rmse)
-mae_stats = compute_stats(mae)
-mape_stats = compute_stats(mape)
-msle_stats = compute_stats(msle)
+rmse_stats = compute_stats(rmse_array)
+mae_stats = compute_stats(mae_array)
+mape_stats = compute_stats(mape_array)
+msle_stats = compute_stats(msle_array)
 
-# Prepare LaTeX table (metrics as columns, stats as rows)
-latex_table = r'''
+# ============================================================
+# LaTeX table
+latex_table = r"""
 \begin{table}[!ht]
 \centering
-\caption{Extended Statistical Results over 50 Runs (Engineering Notation)}
-\begin{tabular}{lccc}
+\caption{Statistical results over 100 runs.}
+\begin{tabular}{lcccc}
 \toprule
 Statistic & RMSE & MAE & MAPE & MSLE \\
 \midrule
-'''
+"""
 
-for stat in rmse_stats.keys():
-    latex_table += f"{stat} & {rmse_stats[stat]:.4e} & {mae_stats[stat]:.4e} & {mape_stats[stat]:.4e} & {msle_stats[stat]:.4e} \\\\\n"
+for statistic in rmse_stats.keys():
+    latex_table += (
+        f"{statistic} & "
+        f"{rmse_stats[statistic]:.4e} & "
+        f"{mae_stats[statistic]:.4e} & "
+        f"{mape_stats[statistic]:.4e} & "
+        f"{msle_stats[statistic]:.4e} \\\\\n"
+    )
 
-latex_table += r'''\bottomrule
+latex_table += r"""\bottomrule
 \end{tabular}
 \label{tab:extended_stats_eng}
 \end{table}
-'''
-
+"""
 print(latex_table)
 
-df = pd.DataFrame({
-    'RMSE': rmse,
-    'MAE': mae,
-    'MAPE': mape,
-    'MSLE': msle
-})
+# ============================================================
+# DataFrame containing all metrics
+results_df = pd.DataFrame(
+    {
+        "RMSE": rmse_array,
+        "MAE": mae_array,
+        "MAPE": mape_array,
+        "MSLE": msle_array,
+    }
+)
 
-plt.figure(figsize=(5, 3), facecolor='white')  # Pure white background
+# ============================================================
+# Boxplot
+plt.figure(figsize=(5, 3), facecolor="white")
 ax = plt.gca()
-ax.set_facecolor('white')  # White plot area
-
-# Create high-contrast boxplot with clear elements
-bp = plt.boxplot([df[col] for col in df.columns], 
-                 labels=df.columns,
-                 patch_artist=True,  # Allow style modifications
-                 boxprops=dict(facecolor='white', color='black', linewidth=1),
-                 whiskerprops=dict(color='black', linestyle='-', linewidth=1),
-                 capprops=dict(color='black', linewidth=1),
-                 medianprops=dict(color='red', linewidth=1),
-                 flierprops=dict(marker='o', markersize=3,
-                               markerfacecolor='black', markeredgecolor='none'))
-
-plt.ylabel('Values', fontsize=10, labelpad=8, fontweight='medium')
-plt.grid(True, linestyle='--', linewidth=0.7, color='#e0e0e0')
-
-# Clean axis styling
-plt.xticks(fontsize=9, rotation=0, ha='center')
+ax.set_facecolor("white")
+plt.boxplot(
+    [results_df[col] for col in results_df.columns],
+    labels=results_df.columns,
+    patch_artist=True,
+    boxprops=dict(facecolor="white", color="black", linewidth=1),
+    whiskerprops=dict(color="black", linestyle="-", linewidth=1),
+    capprops=dict(color="black", linewidth=1),
+    medianprops=dict(color="red", linewidth=1),
+    flierprops=dict(marker="o", markersize=3, markerfacecolor="black", markeredgecolor="none")
+)
+plt.ylabel("Value", fontsize=10, labelpad=8)
+plt.grid(True, linestyle="--", linewidth=0.7, alpha=0.5)
+plt.xticks(fontsize=9)
 plt.yticks(fontsize=9)
-plt.tick_params(axis='both', which='major', length=4, width=0.8, color='#404040')
-
-# Top and right borders
-ax.spines['top'].set_color('#808080')
-ax.spines['right'].set_color('#808080')
-ax.spines['bottom'].set_color('#808080')
-ax.spines['left'].set_color('#808080')
-
-plt.tight_layout(pad=2)
-plt.savefig('sta1a.pdf', dpi=300, bbox_inches='tight', facecolor='white')
+plt.tight_layout()
+plt.savefig("sta1a.pdf", dpi=300, bbox_inches="tight", facecolor="white")
 plt.show()
 
 # Line plot
 plt.figure(figsize=(5, 3))
-plt.plot(df, marker='o')
-#plt.title('Line Plot of 3 Variables over 50 Runs')
-plt.xlabel('Run')
-plt.ylabel('Value')
-plt.legend(df.columns)
+for col in results_df.columns:
+    plt.plot(results_df.index + 1, results_df[col], marker="o", markersize=3, label=col)
+plt.xlabel("Run")
+plt.ylabel("Value")
+plt.legend()
 plt.grid(True)
-plt.savefig('sta2a.pdf', bbox_inches='tight')
+plt.tight_layout()
+plt.savefig("sta2a.pdf", bbox_inches="tight")
 plt.show()
